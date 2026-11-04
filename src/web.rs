@@ -83,7 +83,7 @@ h1{font-size:20px;margin:0;letter-spacing:-.01em}
 .meta{color:var(--muted);font-size:12px}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:22px 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.row{display:grid;grid-template-columns:14px minmax(0,1.3fr) minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:14px minmax(0,1.3fr) minmax(0,1fr) 7.5rem;gap:4px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 .row:first-child{border-top:0}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--unk)}
 .up .dot{background:var(--up)}.down .dot{background:var(--down)}.warn .dot{background:var(--warn)}
