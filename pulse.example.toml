@@ -1,0 +1,57 @@
+# pulse configuration — every field except [[check]] entries is optional.
+
+listen = "127.0.0.1:8097"     # status page; put a TLS reverse proxy in front
+title = "my server"
+interval_secs = 60            # default for every check
+timeout_secs = 10
+failure_threshold = 3         # consecutive failures before DOWN + alert (no flapping spam)
+history = 1440                # samples kept in memory per check (24 h at 60 s)
+ca_files = []                 # extra PEM roots for HTTPS checks, e.g. a Caddy local CA
+
+[alerts]
+# Push notifications: pick a long random topic (anyone who knows it can read it).
+# ntfy_url = "https://ntfy.sh/pulse-7c1f0e2d9a"
+# ntfy_token = "tk_..."
+# Dead man's switch: pinged every heartbeat_secs; the external service alerts
+# you when the pings stop (machine off, network down, pulse dead).
+# heartbeat_url = "https://hc-ping.com/<uuid>"
+# heartbeat_secs = 60
+
+# Email through Resend. The key is read from a file; with systemd use
+# LoadCredentialEncrypted=resend:/etc/pulse/resend.cred and the path below.
+# [alerts.email]
+# from = "pulse <onboarding@resend.dev>"   # or an address on your verified domain
+# to = ["you@example.com"]
+# api_key_file = "$CREDENTIALS_DIRECTORY/resend"
+
+[[check]]
+name = "Website"
+group = "web"
+kind = "http"
+url = "https://example.com/"
+# resolve = "10.0.0.5"          # connect to this IP (SNI/Host stay the URL's)
+# expect_status = [200]         # default: any 2xx/3xx
+# contains = "Example Domain"   # body must contain this
+cert_min_hours = 72             # fail if the certificate expires sooner
+
+[[check]]
+name = "SSH"
+group = "host"
+kind = "tcp"
+addr = "127.0.0.1:22"
+banner = "SSH-"                 # optional: first bytes must contain this
+
+[[check]]
+name = "DNS"
+group = "host"
+kind = "dns"
+server = "127.0.0.53"
+query = "example.com"
+# expect = "93.184.215.14"
+
+[[check]]
+name = "nginx unit"
+group = "host"
+kind = "systemd"
+unit = "nginx.service"
+interval_secs = 30              # per-check overrides: interval_secs, timeout_secs, failure_threshold

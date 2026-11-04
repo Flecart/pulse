@@ -1,0 +1,25 @@
+[package]
+name = "pulse"
+version = "0.1.0"
+edition = "2024"
+description = "Tiny self-hosted health monitor: HTTP/TCP/DNS/systemd checks, one status page, ntfy + email alerts"
+license = "MIT"
+rust-version = "1.95"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "signal", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime"] }
+x509-parser = "0.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+sd-notify = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
