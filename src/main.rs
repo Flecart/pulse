@@ -9,6 +9,7 @@ mod config;
 mod metrics;
 mod probe;
 mod state;
+mod store;
 mod web;
 
 use std::{
@@ -98,13 +99,14 @@ async fn main() {
             .checks
             .iter()
             .map(|c| {
-                Mutex::new(state::CheckState::new(
+                Mutex::new(state::CheckState::with_retention(
                     c.name.clone(),
                     c.group.clone(),
                     c.probe.kind(),
                     c.probe.target(),
                     c.failure_threshold.unwrap_or(cfg.failure_threshold),
                     cfg.history,
+                    cfg.retention_days,
                 ))
             })
             .collect(),
@@ -122,8 +124,32 @@ async fn main() {
         std::process::exit(if errs.is_empty() { 0 } else { 1 });
     }
 
+    // Persistent history: replay the kept days through the state machine (no alerts),
+    // so uptime and UP/DOWN state survive restarts.
+    let store = match &cfg.data_dir {
+        Some(dir) => match store::Store::open(dir, cfg.retention_days) {
+            Ok(st) => {
+                let samples = st.load(web::now());
+                let n = samples.len();
+                for (name, s) in samples {
+                    if let Some(i) = cfg.checks.iter().position(|c| c.name == name) {
+                        app.checks[i].lock().unwrap().record(s);
+                    }
+                }
+                eprintln!("pulse: loaded {n} samples from {dir} (keeping {} days)", cfg.retention_days);
+                Some(Arc::new(st))
+            }
+            Err(e) => {
+                eprintln!("pulse: history disabled: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
     for (i, (c, runner)) in cfg.checks.iter().zip(runners).enumerate() {
         let app = app.clone();
+        let store = store.clone();
         let alerter = alerter.clone();
         let every = Duration::from_secs(c.interval_secs.unwrap_or(cfg.interval_secs));
         let t = Duration::from_secs(c.timeout_secs.unwrap_or(cfg.timeout_secs));
@@ -144,12 +170,11 @@ async fn main() {
                     }
                 }
                 let detail = o.detail.clone();
-                let tr = app.checks[i].lock().unwrap().record(state::Sample {
-                    at: web::now(),
-                    ok: o.ok,
-                    latency_ms: o.latency_ms,
-                    detail: o.detail,
-                });
+                let sample = state::Sample { at: web::now(), ok: o.ok, latency_ms: o.latency_ms, detail: o.detail };
+                if let Some(st) = &store {
+                    st.append(&name, &sample);
+                }
+                let tr = app.checks[i].lock().unwrap().record(sample);
                 match tr {
                     state::Transition::WentDown => {
                         eprintln!("pulse: DOWN {name}: {detail}");

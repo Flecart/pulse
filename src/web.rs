@@ -44,6 +44,7 @@ async fn api(State(app): State<Shared>) -> impl IntoResponse {
                 v["latency_ms"] = serde_json::json!({ "p50": p50, "p95": p95, "p99": p99 });
             }
             v["uptime"] = serde_json::json!(c.uptime());
+            v["uptime_retention"] = serde_json::json!(c.uptime_retention());
             v
         })
         .collect();
@@ -105,7 +106,7 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 .bars i{flex:1;min-width:2px;max-width:6px;border-radius:2px;background:var(--line)}
 .bars i.o{background:var(--up)}.bars i.f{background:var(--down)}
 .nums{text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted);white-space:nowrap}
-.nums b{color:var(--fg);font-weight:600}
+.nums b{color:var(--fg);font-weight:600}.nums b span{font-weight:600}
 @media (max-width:640px){.row{grid-template-columns:14px minmax(0,1fr) auto}.bars{grid-column:2/4}}
 "#;
 
@@ -169,7 +170,12 @@ async fn index(State(app): State<Shared>) -> impl IntoResponse {
                     esc(&s.detail)
                 );
             }
-            let up = c.uptime().map(|u| format!("{:.1}%", u * 100.0)).unwrap_or_else(|| "–".into());
+            let pct = |u: Option<f64>| u.map(|u| format!("{:.1}%", u * 100.0)).unwrap_or_else(|| "–".into());
+            let up = format!(
+                r#"<span title="uptime: last 24 h · whole kept history">{}</span> · {} 7d"#,
+                pct(c.uptime()),
+                pct(c.uptime_retention())
+            );
             let lat = match c.percentiles() {
                 Some((p50, p95, p99)) => format!(
                     r#"<span title="probe latency p50 / p95 / p99 over the kept history">{p50}/{p95}/{p99} ms</span>"#
@@ -178,7 +184,7 @@ async fn index(State(app): State<Shared>) -> impl IntoResponse {
             };
             let _ = write!(
                 h,
-                r#"</div><div class="nums"><b>{up}</b> · {lat}</div><span></span><div class="detail" style="grid-column:2/5">{d}</div></div>"#,
+                r#"</div><div class="nums"><b>{up}</b><br>{lat}</div><span></span><div class="detail" style="grid-column:2/5">{d}</div></div>"#,
                 d = esc(&detail)
             );
         }

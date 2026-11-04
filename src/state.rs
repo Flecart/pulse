@@ -42,10 +42,28 @@ pub struct CheckState {
     #[serde(skip)]
     pub capacity: usize,
     pub history: VecDeque<Sample>,
+    /// (unix hour, ok samples, all samples) for the whole retention window.
+    #[serde(skip)]
+    pub hourly: VecDeque<(i64, u32, u32)>,
+    #[serde(skip)]
+    pub hourly_capacity: usize,
 }
 
 impl CheckState {
+    #[cfg(test)]
     pub fn new(name: String, group: String, kind: &'static str, target: String, threshold: u32, capacity: usize) -> Self {
+        Self::with_retention(name, group, kind, target, threshold, capacity, 7)
+    }
+
+    pub fn with_retention(
+        name: String,
+        group: String,
+        kind: &'static str,
+        target: String,
+        threshold: u32,
+        capacity: usize,
+        retention_days: u32,
+    ) -> Self {
         CheckState {
             name,
             group,
@@ -57,6 +75,8 @@ impl CheckState {
             threshold,
             capacity,
             history: VecDeque::with_capacity(capacity.min(4096)),
+            hourly: VecDeque::new(),
+            hourly_capacity: retention_days.max(1) as usize * 24,
         }
     }
 
@@ -75,7 +95,13 @@ impl CheckState {
         Some((at(0.50), at(0.95), at(0.99)))
     }
 
-    /// Fraction of OK samples in the kept history (None if empty).
+    /// Fraction of OK samples over the whole retention window (hourly counts).
+    pub fn uptime_retention(&self) -> Option<f64> {
+        let (ok, all) = self.hourly.iter().fold((0u64, 0u64), |(a, b), h| (a + h.1 as u64, b + h.2 as u64));
+        if all == 0 { None } else { Some(ok as f64 / all as f64) }
+    }
+
+    /// Fraction of OK samples in the kept raw history (None if empty).
     pub fn uptime(&self) -> Option<f64> {
         if self.history.is_empty() {
             return None;
@@ -90,6 +116,19 @@ impl CheckState {
             self.history.pop_front();
         }
         self.history.push_back(s);
+        let hour = at.div_euclid(3600);
+        match self.hourly.back_mut() {
+            Some(h) if h.0 == hour => {
+                h.1 += ok as u32;
+                h.2 += 1;
+            }
+            _ => {
+                self.hourly.push_back((hour, ok as u32, 1));
+                while self.hourly.len() > self.hourly_capacity {
+                    self.hourly.pop_front();
+                }
+            }
+        }
 
         if ok {
             self.consecutive_failures = 0;
@@ -164,5 +203,8 @@ mod tests {
         }
         assert_eq!(c.history.len(), 5);
         assert_eq!(c.uptime(), Some(1.0));
+        // hourly summary keeps everything that fell out of the raw window
+        assert_eq!(c.hourly.len(), 1);
+        assert_eq!(c.hourly[0], (0, 17, 19));
     }
 }

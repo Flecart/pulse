@@ -5,7 +5,9 @@ title = "my server"
 interval_secs = 60            # default for every check
 timeout_secs = 10
 failure_threshold = 3         # consecutive failures before DOWN + alert (no flapping spam)
-history = 1440                # samples kept in memory per check (24 h at 60 s)
+history = 1440                # raw samples kept in memory per check (24 h at 60 s)
+# data_dir = "/var/lib/pulse"   # persist history (one JSON-lines file per day)
+retention_days = 7            # older days are deleted; hourly up/down counts kept in memory
 ca_files = []                 # extra PEM roots for HTTPS checks, e.g. a Caddy local CA
 
 [alerts]

@@ -20,9 +20,16 @@ pub struct Config {
     /// Consecutive failures before a check is DOWN (and an alert is sent).
     #[serde(default = "d_threshold")]
     pub failure_threshold: u32,
-    /// Samples kept per check, in memory (1440 x 60 s = 24 h).
+    /// Raw samples kept per check in memory (1440 x 60 s = 24 h). Older data is
+    /// kept as hourly up/down counts for `retention_days`.
     #[serde(default = "d_history")]
     pub history: usize,
+    /// If set, every sample is also appended to <data_dir>/<YYYY-MM-DD>.jsonl and
+    /// reloaded on start, so restarts keep history.
+    pub data_dir: Option<String>,
+    /// Days of history kept (hourly summary in memory, raw lines on disk).
+    #[serde(default = "d_retention")]
+    pub retention_days: u32,
     /// Extra PEM root certificates trusted by HTTP checks (e.g. a Caddy local CA).
     #[serde(default)]
     pub ca_files: Vec<String>,
@@ -177,6 +184,9 @@ fn d_threshold() -> u32 {
 fn d_history() -> usize {
     1440
 }
+fn d_retention() -> u32 {
+    7
+}
 fn d_heartbeat() -> u64 {
     60
 }
@@ -195,8 +205,8 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         let mut names = HashSet::new();
-        if self.interval_secs == 0 || self.timeout_secs == 0 || self.failure_threshold == 0 || self.history == 0 {
-            return Err("interval_secs, timeout_secs, failure_threshold and history must be > 0".into());
+        if self.interval_secs == 0 || self.timeout_secs == 0 || self.failure_threshold == 0 || self.history == 0 || self.retention_days == 0 {
+            return Err("interval_secs, timeout_secs, failure_threshold, history and retention_days must be > 0".into());
         }
         if let Some(e) = &self.alerts.email {
             if e.to.is_empty() || e.from.trim().is_empty() || e.api_key_file.trim().is_empty() {

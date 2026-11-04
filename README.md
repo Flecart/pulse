@@ -30,7 +30,11 @@ check's state changes.
 - **systemd-native:** `Type=notify` with watchdog support, and the API key can come from
   `LoadCredentialEncrypted=`.
 
-History lives in memory only, about 24 h per check by default, and is lost on restart.
+**History:** the last 24 h of raw samples stay in memory, plus hourly up/down counts for
+`retention_days` (default 7), which give the "7d" uptime. With `data_dir` set, every sample is also
+appended to `<data_dir>/YYYY-MM-DD.jsonl` (about 60 bytes per sample, since the detail text is
+written only when it changes) and reloaded on start. Day files older than the retention window are
+deleted automatically.
 
 ## Use
 
