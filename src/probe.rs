@@ -253,8 +253,8 @@ mod tests {
 
     #[test]
     fn dns_server_forms() {
-        assert_eq!(parse_dns_server("10.8.0.1").unwrap().port(), 53);
-        assert_eq!(parse_dns_server("10.8.0.1:5353").unwrap().port(), 5353);
+        assert_eq!(parse_dns_server("10.0.0.1").unwrap().port(), 53);
+        assert_eq!(parse_dns_server("10.0.0.1:5353").unwrap().port(), 5353);
         assert!(parse_dns_server("dns.example").is_err());
     }
 

@@ -262,22 +262,22 @@ mod tests {
             [[check]]
             name = "web"
             kind = "http"
-            url = "https://git.home.arpa/api/healthz"
-            resolve = "10.9.0.1"
+            url = "https://example.home.arpa/api/healthz"
+            resolve = "10.0.0.2"
             contains = "pass"
             cert_min_hours = 2
             [[check]]
             name = "ssh"
             group = "git"
             kind = "tcp"
-            addr = "10.9.0.1:22"
+            addr = "10.0.0.2:22"
             banner = "SSH-"
             [[check]]
             name = "dns"
             kind = "dns"
-            server = "10.8.0.1"
-            query = "git.home.arpa"
-            expect = "10.9.0.1"
+            server = "10.0.0.1"
+            query = "example.home.arpa"
+            expect = "10.0.0.2"
             [[check]]
             name = "caddy"
             kind = "systemd"
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(kinds, ["http", "tcp", "dns", "systemd"]);
         assert_eq!(cfg.checks[1].group, "git");
         assert_eq!(cfg.checks[3].interval_secs, Some(30));
-        assert_eq!(cfg.checks[2].probe.target(), "git.home.arpa @10.8.0.1");
+        assert_eq!(cfg.checks[2].probe.target(), "example.home.arpa @10.0.0.1");
         assert_eq!(cfg.listen, "127.0.0.1:8097");
         assert_eq!(cfg.alerts.ntfy_url.as_deref(), Some("https://ntfy.sh/x"));
         let e = cfg.alerts.email.unwrap();

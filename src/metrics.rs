@@ -468,14 +468,14 @@ mod tests {
 
     #[test]
     fn parses_caddy_metrics_for_one_host() {
-        let p = CaddyProbe::new(reqwest::Client::new(), String::new(), "git.home.arpa".into(), None, None, None);
+        let p = CaddyProbe::new(reqwest::Client::new(), String::new(), "a.example.com".into(), None, None, None);
         let text = r#"
-caddy_http_request_duration_seconds_bucket{code="200",handler="reverse_proxy",host="git.home.arpa",method="GET",server="srv2",le="0.05"} 8
-caddy_http_request_duration_seconds_bucket{code="200",handler="reverse_proxy",host="git.home.arpa",method="GET",server="srv2",le="+Inf"} 10
-caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="git.home.arpa",method="GET",server="srv2"} 10
-caddy_http_request_duration_seconds_count{code="502",handler="reverse_proxy",host="git.home.arpa",method="GET",server="srv2"} 2
-caddy_http_request_duration_seconds_count{code="200",handler="encode",host="git.home.arpa",method="GET",server="srv2"} 99
-caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="leaf.home.arpa",method="GET",server="srv2"} 7
+caddy_http_request_duration_seconds_bucket{code="200",handler="reverse_proxy",host="a.example.com",method="GET",server="srv2",le="0.05"} 8
+caddy_http_request_duration_seconds_bucket{code="200",handler="reverse_proxy",host="a.example.com",method="GET",server="srv2",le="+Inf"} 10
+caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="a.example.com",method="GET",server="srv2"} 10
+caddy_http_request_duration_seconds_count{code="502",handler="reverse_proxy",host="a.example.com",method="GET",server="srv2"} 2
+caddy_http_request_duration_seconds_count{code="200",handler="encode",host="a.example.com",method="GET",server="srv2"} 99
+caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="b.example.com",method="GET",server="srv2"} 7
 "#;
         let (has, codes, buckets) = p.parse(text);
         assert!(has);

@@ -2,8 +2,12 @@
 name = "pulse"
 version = "0.1.0"
 edition = "2024"
-description = "Tiny self-hosted health monitor: HTTP/TCP/DNS/systemd checks, one status page, ntfy + email alerts"
+description = "A tiny self-hosted health monitor: HTTP/TCP/DNS/systemd/host-metric checks, one status page, ntfy + email alerts"
 license = "MIT"
+repository = "https://github.com/Flecart/pulse"
+readme = "README.md"
+keywords = ["monitoring", "uptime", "healthcheck", "systemd", "selfhosted"]
+categories = ["command-line-utilities"]
 rust-version = "1.95"
 
 [dependencies]
