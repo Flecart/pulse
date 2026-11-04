@@ -67,7 +67,7 @@ fn chain(e: &dyn Error) -> String {
 }
 
 impl Runner {
-    pub fn new(check: &Check, roots: &[reqwest::Certificate], t: Duration) -> Result<Self, String> {
+    pub fn new(check: &Check, tls: &std::sync::Arc<rustls::ClientConfig>, t: Duration) -> Result<Self, String> {
         Ok(match &check.probe {
             Probe::Http { url, resolve, expect_status, contains, cert_min_hours } => {
                 let mut b = reqwest::Client::builder()
@@ -77,9 +77,7 @@ impl Runner {
                     .user_agent(concat!("pulse/", env!("CARGO_PKG_VERSION")))
                     .tls_info(true)
                     .pool_max_idle_per_host(0); // fresh connection each time = real check
-                for r in roots {
-                    b = b.add_root_certificate(r.clone());
-                }
+                b = b.use_preconfigured_tls((**tls).clone());
                 if let Some(ip) = resolve {
                     let u = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
                     let host = u.host_str().ok_or("url has no host")?.to_string();

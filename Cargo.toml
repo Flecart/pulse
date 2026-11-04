@@ -17,6 +17,10 @@ serde_json = "1"
 toml = "0.8"
 sd-notify = "0.4"
 libc = "0.2"
+# Same rustls as reqwest, so pulse can hand it a config with session resumption OFF.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+webpki-roots = "1"
 
 [profile.release]
 opt-level = "s"

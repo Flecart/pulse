@@ -23,17 +23,32 @@ fn usage() -> ! {
     std::process::exit(2)
 }
 
-fn load_roots(files: &[String]) -> Result<Vec<reqwest::Certificate>, String> {
-    let mut out = Vec::new();
+/// TLS config for HTTP checks: public roots + `ca_files`, and NO session resumption.
+/// A resumed TLS session skips the certificate, so a monitor would keep seeing (and
+/// counting down) the first certificate it saw, never the renewed one, and would never
+/// notice a real expiry. Every check must do a full handshake.
+fn tls_config(files: &[String]) -> Result<Arc<rustls::ClientConfig>, String> {
+    use rustls_pki_types::{CertificateDer, pem::PemObject};
+    let mut roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
     for f in files {
         let pem = std::fs::read(f).map_err(|e| format!("{f}: {e}"))?;
-        let certs = reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| format!("{f}: {e}"))?;
-        if certs.is_empty() {
+        let mut n = 0;
+        for c in CertificateDer::pem_slice_iter(&pem) {
+            let c = c.map_err(|e| format!("{f}: {e}"))?;
+            roots.add(c).map_err(|e| format!("{f}: {e}"))?;
+            n += 1;
+        }
+        if n == 0 {
             return Err(format!("{f}: no certificates found"));
         }
-        out.extend(certs);
     }
-    Ok(out)
+    let mut cfg = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    cfg.resumption = rustls::client::Resumption::disabled();
+    Ok(Arc::new(cfg))
 }
 
 #[tokio::main]
@@ -71,7 +86,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let roots = load_roots(&cfg.ca_files).unwrap_or_else(|e| {
+    let tls = tls_config(&cfg.ca_files).unwrap_or_else(|e| {
         eprintln!("pulse: {e}");
         std::process::exit(1)
     });
@@ -80,7 +95,7 @@ async fn main() {
     let mut runners = Vec::new();
     for c in &cfg.checks {
         let t = Duration::from_secs(c.timeout_secs.unwrap_or(cfg.timeout_secs));
-        match probe::Runner::new(c, &roots, t) {
+        match probe::Runner::new(c, &tls, t) {
             Ok(r) => runners.push(r),
             Err(e) => {
                 eprintln!("pulse: check {:?}: {e}", c.name);

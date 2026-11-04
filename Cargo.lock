@@ -853,11 +853,14 @@ dependencies = [
  "hickory-resolver",
  "libc",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
  "sd-notify",
  "serde",
  "serde_json",
  "tokio",
  "toml",
+ "webpki-roots",
  "x509-parser",
 ]
 
