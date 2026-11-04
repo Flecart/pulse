@@ -74,6 +74,8 @@ pub struct Check {
     pub interval_secs: Option<u64>,
     pub timeout_secs: Option<u64>,
     pub failure_threshold: Option<u32>,
+    /// A run slower than this counts as a failure ("slow").
+    pub max_latency_ms: Option<u64>,
     #[serde(flatten)]
     pub probe: Probe,
 }
@@ -95,8 +97,34 @@ pub enum Probe {
     Tcp { addr: String, banner: Option<String> },
     /// Resolve `query` (A/AAAA) at `server`; optionally the answer must include `expect`.
     Dns { server: String, query: String, expect: Option<String> },
-    /// `systemctl is-active <unit>` must print `active`.
+    /// Unit must be active, and must not have restarted since the previous run
+    /// (catches crash-loops that look "up" most of the time).
     Systemd { unit: String },
+    /// Machine metric (USE): see `pulse --list-metrics`. Fails above `max` /
+    /// below `min` (each metric has a sensible default bound).
+    Metric {
+        metric: String,
+        path: Option<String>,
+        device: Option<String>,
+        iface: Option<String>,
+        max: Option<f64>,
+        min: Option<f64>,
+    },
+    /// Per-site RED metrics from Caddy's Prometheus endpoint (needs the global
+    /// option `metrics { per_host }`): request rate, 5xx %, p50/p95/p99.
+    Caddy {
+        host: String,
+        #[serde(default = "d_caddy_metrics")]
+        metrics_url: String,
+        max_error_percent: Option<f64>,
+        max_p95_ms: Option<f64>,
+        /// req/min; a drop to zero can be worse than a spike.
+        min_rate: Option<f64>,
+    },
+}
+
+fn d_caddy_metrics() -> String {
+    "http://127.0.0.1:2019/metrics".into()
 }
 
 impl Probe {
@@ -106,6 +134,8 @@ impl Probe {
             Probe::Tcp { .. } => "tcp",
             Probe::Dns { .. } => "dns",
             Probe::Systemd { .. } => "systemd",
+            Probe::Metric { .. } => "metric",
+            Probe::Caddy { .. } => "caddy",
         }
     }
     pub fn target(&self) -> String {
@@ -117,6 +147,14 @@ impl Probe {
             Probe::Tcp { addr, .. } => addr.clone(),
             Probe::Dns { server, query, .. } => format!("{query} @{server}"),
             Probe::Systemd { unit } => unit.clone(),
+            Probe::Metric { metric, path, device, iface, .. } => {
+                let arg = path.as_deref().or(device.as_deref()).or(iface.as_deref());
+                match arg {
+                    Some(a) => format!("{metric} {a}"),
+                    None => metric.clone(),
+                }
+            }
+            Probe::Caddy { host, .. } => format!("{host} (Caddy metrics)"),
         }
     }
 }

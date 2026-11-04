@@ -64,6 +64,17 @@ impl CheckState {
         self.history.back()
     }
 
+    /// p50 / p95 / p99 of the probe's own latency over the kept history (ms).
+    pub fn percentiles(&self) -> Option<(u64, u64, u64)> {
+        let mut v: Vec<u64> = self.history.iter().map(|s| s.latency_ms).collect();
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_unstable();
+        let at = |q: f64| v[((q * v.len() as f64).ceil() as usize).clamp(1, v.len()) - 1];
+        Some((at(0.50), at(0.95), at(0.99)))
+    }
+
     /// Fraction of OK samples in the kept history (None if empty).
     pub fn uptime(&self) -> Option<f64> {
         if self.history.is_empty() {
@@ -130,6 +141,16 @@ mod tests {
         for i in 0..20 {
             assert_eq!(c.record(s(i, i % 3 != 0)), Transition::None);
         }
+    }
+
+    #[test]
+    fn latency_percentiles() {
+        let mut c = CheckState::new("a".into(), "".into(), "tcp", "x".into(), 3, 200);
+        assert_eq!(c.percentiles(), None);
+        for i in 1..=100 {
+            c.record(Sample { at: i, ok: true, latency_ms: i as u64, detail: String::new() });
+        }
+        assert_eq!(c.percentiles(), Some((50, 95, 99)));
     }
 
     #[test]

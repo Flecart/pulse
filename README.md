@@ -8,7 +8,16 @@ check's state changes.
   - `http`: status code, body substring, TLS certificate lifetime, optional fixed IP;
   - `tcp`: connect, optional banner match (e.g. `SSH-`);
   - `dns`: query a specific server, optional expected IP;
-  - `systemd`: `systemctl is-active`.
+  - `systemd`: the unit is active and hasn't restarted since the previous run, which catches
+    crash-loops;
+  - `metric`: machine health in the USE style (CPU busy/iowait/steal, load per core, available
+    memory, swap activity, OOM kills, disk and inode free space, read-only remounts, disk latency
+    and queue depth, network drops and errors, TCP retransmits and connections, file-descriptor
+    use, GPU utilization/memory/temperature/throttling). `pulse --list-metrics` lists them;
+  - `caddy`: per-site RED metrics from Caddy's Prometheus endpoint: request rate, 5xx %,
+    p50/p95/p99 latency, and an optional minimum traffic rate.
+- **Latency percentiles:** every check shows the p50/p95/p99 of its own run time, and
+  `max_latency_ms` turns slow runs into failures.
 - **No alert spam:** a check goes DOWN only after `failure_threshold` consecutive failures. You get
   one alert when it goes down and one when it recovers.
 - **Alerts:**

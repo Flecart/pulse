@@ -36,6 +36,17 @@ fn snapshot(app: &App) -> Vec<CheckState> {
 async fn api(State(app): State<Shared>) -> impl IntoResponse {
     let checks = snapshot(&app);
     let down = checks.iter().filter(|c| c.status == Status::Down).count();
+    let checks: Vec<_> = checks
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            if let Some((p50, p95, p99)) = c.percentiles() {
+                v["latency_ms"] = serde_json::json!({ "p50": p50, "p95": p95, "p99": p99 });
+            }
+            v["uptime"] = serde_json::json!(c.uptime());
+            v
+        })
+        .collect();
     Json(serde_json::json!({ "title": app.title, "down": down, "checks": checks }))
 }
 
@@ -83,7 +94,7 @@ h1{font-size:20px;margin:0;letter-spacing:-.01em}
 .meta{color:var(--muted);font-size:12px}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:22px 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.row{display:grid;grid-template-columns:14px minmax(0,1.3fr) minmax(0,1fr) 7.5rem;gap:4px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:14px minmax(0,1.3fr) minmax(0,1fr) 9.5rem;gap:4px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 .row:first-child{border-top:0}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--unk)}
 .up .dot{background:var(--up)}.down .dot{background:var(--down)}.warn .dot{background:var(--warn)}
@@ -159,7 +170,12 @@ async fn index(State(app): State<Shared>) -> impl IntoResponse {
                 );
             }
             let up = c.uptime().map(|u| format!("{:.1}%", u * 100.0)).unwrap_or_else(|| "–".into());
-            let lat = last.map(|l| format!("{} ms", l.latency_ms)).unwrap_or_else(|| "–".into());
+            let lat = match c.percentiles() {
+                Some((p50, p95, p99)) => format!(
+                    r#"<span title="probe latency p50 / p95 / p99 over the kept history">{p50}/{p95}/{p99} ms</span>"#
+                ),
+                None => "–".into(),
+            };
             let _ = write!(
                 h,
                 r#"</div><div class="nums"><b>{up}</b> · {lat}</div><span></span><div class="detail" style="grid-column:2/5">{d}</div></div>"#,

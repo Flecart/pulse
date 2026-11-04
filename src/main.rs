@@ -6,6 +6,7 @@
 
 mod alert;
 mod config;
+mod metrics;
 mod probe;
 mod state;
 mod web;
@@ -17,7 +18,7 @@ use std::{
 };
 
 fn usage() -> ! {
-    eprintln!("usage: pulse [--config FILE] [--test-alert] | --check-config FILE | --version");
+    eprintln!("usage: pulse [--config FILE] [--test-alert] | --check-config FILE | --list-metrics | --version");
     std::process::exit(2)
 }
 
@@ -48,6 +49,12 @@ async fn main() {
                 check_only = true;
             }
             "--test-alert" => test_alert = true,
+            "--list-metrics" => {
+                for m in metrics::names() {
+                    println!("{m}");
+                }
+                return;
+            }
             "--version" | "-V" => {
                 println!("pulse {}", env!("CARGO_PKG_VERSION"));
                 return;
@@ -121,6 +128,7 @@ async fn main() {
         let every = Duration::from_secs(c.interval_secs.unwrap_or(cfg.interval_secs));
         let t = Duration::from_secs(c.timeout_secs.unwrap_or(cfg.timeout_secs));
         let name = c.name.clone();
+        let max_latency = c.max_latency_ms;
         tokio::spawn(async move {
             // Stagger starts so checks don't all fire in the same instant.
             tokio::time::sleep(Duration::from_millis(250 * i as u64 % 15_000)).await;
@@ -128,7 +136,13 @@ async fn main() {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                let o = runner.run(t).await;
+                let mut o = runner.run(t).await;
+                if let Some(max) = max_latency {
+                    if o.ok && o.latency_ms > max {
+                        o.ok = false;
+                        o.detail = format!("slow: {} ms > {max} ms ({})", o.latency_ms, o.detail);
+                    }
+                }
                 let detail = o.detail.clone();
                 let tr = app.checks[i].lock().unwrap().record(state::Sample {
                     at: web::now(),

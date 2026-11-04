@@ -39,7 +39,10 @@ pub enum Runner {
     },
     Systemd {
         unit: String,
+        restarts: std::sync::Mutex<Option<u64>>,
     },
+    Metric(crate::metrics::MetricProbe),
+    Caddy(crate::metrics::CaddyProbe),
 }
 
 pub fn parse_dns_server(s: &str) -> Result<SocketAddr, String> {
@@ -101,7 +104,26 @@ impl Runner {
                     None => None,
                 },
             },
-            Probe::Systemd { unit } => Runner::Systemd { unit: unit.clone() },
+            Probe::Systemd { unit } => Runner::Systemd { unit: unit.clone(), restarts: std::sync::Mutex::new(None) },
+            Probe::Metric { metric, path, device, iface, max, min } => Runner::Metric(crate::metrics::MetricProbe::new(
+                metric,
+                path.as_deref(),
+                device.as_deref(),
+                iface.as_deref(),
+                *max,
+                *min,
+            )?),
+            Probe::Caddy { host, metrics_url, max_error_percent, max_p95_ms, min_rate } => {
+                let client = reqwest::Client::builder().timeout(t).build().map_err(|e| chain(&e))?;
+                Runner::Caddy(crate::metrics::CaddyProbe::new(
+                    client,
+                    metrics_url.clone(),
+                    host.clone(),
+                    *max_error_percent,
+                    *max_p95_ms,
+                    *min_rate,
+                ))
+            }
         })
     }
 
@@ -181,14 +203,37 @@ impl Runner {
                 }
             }
 
-            Runner::Systemd { unit } => {
-                let out = timeout(t, Command::new("systemctl").args(["is-active", "--", unit]).output())
-                    .await
-                    .map_err(|_| "systemctl timed out".to_string())?
-                    .map_err(|e| format!("systemctl: {e}"))?;
-                let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if state == "active" { Ok(state) } else { Err(if state.is_empty() { "unknown".into() } else { state }) }
+            Runner::Systemd { unit, restarts } => {
+                let out = timeout(
+                    t,
+                    Command::new("systemctl")
+                        .args(["show", "--property=ActiveState,SubState,NRestarts,LoadState", "--", unit])
+                        .output(),
+                )
+                .await
+                .map_err(|_| "systemctl timed out".to_string())?
+                .map_err(|e| format!("systemctl: {e}"))?;
+                let text = String::from_utf8_lossy(&out.stdout);
+                let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").trim().to_string();
+                let (active, sub, load) = (get("ActiveState="), get("SubState="), get("LoadState="));
+                let n: Option<u64> = get("NRestarts=").parse().ok();
+                if load == "not-found" {
+                    return Err("unit not found".into());
+                }
+                let before = std::mem::replace(&mut *restarts.lock().unwrap(), n);
+                let state = format!("{active} ({sub})");
+                if active != "active" {
+                    return Err(state);
+                }
+                match (before, n) {
+                    (Some(b), Some(n)) if n > b => Err(format!("{state}, restarted {}x since last check", n - b)),
+                    (_, Some(n)) if n > 0 => Ok(format!("{state}, {n} restarts since boot")),
+                    _ => Ok(state),
+                }
             }
+
+            Runner::Metric(m) => m.run().await,
+            Runner::Caddy(c) => c.run().await,
         }
     }
 }
