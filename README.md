@@ -50,6 +50,11 @@ over the time since the previous run.
 | Network | `net_drops_per_sec`, `net_errors_per_sec`, `tcp_retrans_percent`, `tcp_connections` |
 | System | `fd_used_percent` |
 | GPU | `gpu_util_percent`, `gpu_mem_percent`, `gpu_temp_c`, `gpu_throttle` |
+| Power | `power_system_watts` (Intel RAPL `psys`, whole platform), `power_cpu_watts` (RAPL `package-0`), `battery_watts` (discharge) |
+
+The RAPL metrics average the energy counter over the interval. `energy_uj` is root-only by
+default, so grant the service read access, e.g. with a udev rule:
+`SUBSYSTEM=="powercap", RUN+="/bin/sh -c 'chgrp pulse /sys%p/energy_uj && chmod 0440 /sys%p/energy_uj'"`.
 
 Each metric has a sensible default bound.
 

@@ -31,6 +31,9 @@ pub enum Metric {
     GpuMemPercent,
     GpuTempC,
     GpuThrottle,
+    PowerSystemWatts,
+    PowerCpuWatts,
+    BatteryWatts,
 }
 
 /// (name, metric, needs: "path" | "device" | "iface" | "", default bound, bound is a minimum)
@@ -56,6 +59,9 @@ const TABLE: &[(&str, Metric, &str, f64, bool)] = &[
     ("gpu_mem_percent", Metric::GpuMemPercent, "", 95.0, false),
     ("gpu_temp_c", Metric::GpuTempC, "", 87.0, false),
     ("gpu_throttle", Metric::GpuThrottle, "", 0.0, false),
+    ("power_system_watts", Metric::PowerSystemWatts, "", 500.0, false),
+    ("power_cpu_watts", Metric::PowerCpuWatts, "", 500.0, false),
+    ("battery_watts", Metric::BatteryWatts, "", 500.0, false),
 ];
 
 pub fn names() -> Vec<&'static str> {
@@ -151,6 +157,8 @@ impl MetricProbe {
                     h.split_whitespace().zip(v.split_whitespace()).filter_map(|(k, x)| Some((k, x.parse().ok()?))).collect();
                 vec![m.get("OutSegs").copied().unwrap_or(0.0), m.get("RetransSegs").copied().unwrap_or(0.0)]
             }
+            Metric::PowerSystemWatts => rapl_energy("psys")?,
+            Metric::PowerCpuWatts => rapl_energy("package-0")?,
             _ => return Ok(None),
         }))
     }
@@ -177,6 +185,14 @@ impl MetricProbe {
     }
 
     fn from_delta(&self, a: &[f64], b: &[f64], dt: Duration) -> (f64, &'static str) {
+        if matches!(self.metric, Metric::PowerSystemWatts | Metric::PowerCpuWatts) {
+            // [energy µJ, wrap range µJ]: the counter wraps at max_energy_range_uj.
+            let mut e = b[0] - a[0];
+            if e < 0.0 {
+                e += b[1];
+            }
+            return (e / 1e6 / dt.as_secs_f64().max(0.001), " W");
+        }
         let d: Vec<f64> = a.iter().zip(b).map(|(x, y)| (y - x).max(0.0)).collect();
         let secs = dt.as_secs_f64().max(0.001);
         let pct = |n: f64, of: f64| if of > 0.0 { 100.0 * n / of } else { 0.0 };
@@ -278,6 +294,7 @@ impl MetricProbe {
                     }
                 }
             }
+            Metric::BatteryWatts => battery_watts()?,
             _ => return Err("not a gauge".into()),
         })
     }
@@ -303,6 +320,49 @@ impl MetricProbe {
             Ok(format!("{shown}{unit}{what}"))
         }
     }
+}
+
+/// Intel RAPL energy counter of the first powercap zone named `zone`
+/// ("psys" = whole platform, "package-0" = CPU package): [energy µJ, wrap range µJ].
+/// energy_uj is root-only by default; the deployment grants the service group read access.
+fn rapl_energy(zone: &str) -> Result<Vec<f64>, String> {
+    let dir = std::fs::read_dir("/sys/class/powercap").map_err(|e| format!("/sys/class/powercap: {e}"))?;
+    let mut zones: Vec<_> = dir.flatten().map(|e| e.path()).collect();
+    zones.sort(); // intel-rapl:N before intel-rapl-mmio:N
+    for z in zones {
+        if std::fs::read_to_string(z.join("name")).is_ok_and(|n| n.trim() == zone) {
+            let num = |f: &str| -> Result<f64, String> {
+                let p = z.join(f);
+                std::fs::read_to_string(&p)
+                    .map_err(|e| format!("{}: {e}", p.display()))?
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("{}: not a number", p.display()))
+            };
+            return Ok(vec![num("energy_uj")?, num("max_energy_range_uj")?]);
+        }
+    }
+    Err(format!("no RAPL zone named {zone:?} under /sys/class/powercap"))
+}
+
+/// Battery discharge power in W (0 while on AC / charging / full).
+fn battery_watts() -> Result<(f64, &'static str), String> {
+    let dir = std::fs::read_dir("/sys/class/power_supply").map_err(|e| format!("/sys/class/power_supply: {e}"))?;
+    for b in dir.flatten().map(|e| e.path()) {
+        if std::fs::read_to_string(b.join("type")).map(|t| t.trim() != "Battery").unwrap_or(true) {
+            continue;
+        }
+        let num = |f: &str| std::fs::read_to_string(b.join(f)).ok().and_then(|s| s.trim().parse::<f64>().ok());
+        let status = std::fs::read_to_string(b.join("status")).unwrap_or_default();
+        if status.trim() != "Discharging" {
+            return Ok((0.0, " W (not discharging)"));
+        }
+        let uw = num("power_now")
+            .or_else(|| Some(num("current_now")? * num("voltage_now")? / 1e6))
+            .ok_or("battery has neither power_now nor current_now/voltage_now")?;
+        return Ok((uw.abs() / 1e6, " W from battery"));
+    }
+    Err("no battery".into())
 }
 
 /// (blocks, blocks available, inodes, inodes available)
@@ -482,6 +542,14 @@ caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",hos
         assert_eq!(codes.get("200"), Some(&10.0));
         assert_eq!(codes.get("502"), Some(&2.0));
         assert_eq!(buckets.len(), 2);
+    }
+
+    #[test]
+    fn rapl_watts_handle_counter_wrap() {
+        let m = MetricProbe::new("power_system_watts", None, None, None, None, None).unwrap();
+        let w = |a: f64, b: f64| m.from_delta(&[a, 1e9], &[b, 1e9], Duration::from_secs(10)).0;
+        assert!((w(1e6, 101e6) - 10.0).abs() < 1e-9); // 100 J in 10 s
+        assert!((w(1e9 - 50e6, 50e6) - 10.0).abs() < 1e-9); // wrapped
     }
 
     #[tokio::test]
