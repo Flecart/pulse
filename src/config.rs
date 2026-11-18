@@ -33,6 +33,10 @@ pub struct Config {
     /// Extra PEM root certificates trusted by HTTP checks (e.g. a Caddy local CA).
     #[serde(default)]
     pub ca_files: Vec<String>,
+    /// If set, `dir_size_gb` checks read sizes from this file, written by
+    /// `pulse --du-scan` (run it from a timer that may read the service dirs),
+    /// instead of walking the directories themselves.
+    pub du_file: Option<String>,
     #[serde(default)]
     pub alerts: Alerts,
     #[serde(default, rename = "check")]
@@ -196,6 +200,21 @@ impl Config {
         let cfg: Config = toml::from_str(text).map_err(|e| e.to_string())?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Every directory a `dir_size_gb` check watches (what `--du-scan` walks).
+    pub fn du_paths(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .checks
+            .iter()
+            .filter_map(|c| match &c.probe {
+                Probe::Metric { metric, path: Some(p), .. } if metric == "dir_size_gb" => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {

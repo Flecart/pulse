@@ -3,7 +3,7 @@
 //! deltas since the previous run of the same check (the first run measures over 1 s).
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -34,6 +34,8 @@ pub enum Metric {
     PowerSystemWatts,
     PowerCpuWatts,
     BatteryWatts,
+    DirSizeGb,
+    DiskHoursToFull,
 }
 
 /// (name, metric, needs: "path" | "device" | "iface" | "", default bound, bound is a minimum)
@@ -62,7 +64,14 @@ const TABLE: &[(&str, Metric, &str, f64, bool)] = &[
     ("power_system_watts", Metric::PowerSystemWatts, "", 500.0, false),
     ("power_cpu_watts", Metric::PowerCpuWatts, "", 500.0, false),
     ("battery_watts", Metric::BatteryWatts, "", 500.0, false),
+    ("dir_size_gb", Metric::DirSizeGb, "path", 50.0, false),
+    ("disk_hours_to_full", Metric::DiskHoursToFull, "path", 24.0, true),
 ];
+
+/// Growth rates (dir_size_gb, disk_hours_to_full) compare against the oldest
+/// sample of the last TREND_WINDOW, once at least TREND_MIN of data exists.
+const TREND_WINDOW: Duration = Duration::from_secs(3600);
+const TREND_MIN: Duration = Duration::from_secs(600);
 
 pub fn names() -> Vec<&'static str> {
     TABLE.iter().map(|t| t.0).collect()
@@ -74,6 +83,8 @@ pub struct MetricProbe {
     bound: f64,
     is_min: bool,
     prev: Mutex<Option<(Instant, Vec<f64>)>>,
+    /// (when, bytes) samples for growth-rate metrics, last TREND_WINDOW only.
+    trend: Mutex<VecDeque<(Instant, f64)>>,
 }
 
 fn read(p: &str) -> Result<String, String> {
@@ -100,7 +111,7 @@ impl MetricProbe {
             (None, Some(m)) => (m, true),
             (None, None) => (default, default_is_min),
         };
-        Ok(MetricProbe { metric, arg, bound, is_min, prev: Mutex::new(None) })
+        Ok(MetricProbe { metric, arg, bound, is_min, prev: Mutex::new(None), trend: Mutex::new(VecDeque::new()) })
     }
 
     /// Counters for delta metrics, or None for gauges.
@@ -299,7 +310,55 @@ impl MetricProbe {
         })
     }
 
+    /// Record `bytes` and return its growth in bytes/hour over the trend window
+    /// (None until TREND_MIN of history exists).
+    fn growth_per_hour(&self, now: Instant, bytes: f64) -> Option<f64> {
+        let mut t = self.trend.lock().unwrap();
+        t.push_back((now, bytes));
+        while t.len() > 2 && now.duration_since(t[1].0) >= TREND_WINDOW {
+            t.pop_front();
+        }
+        let (t0, b0) = *t.front()?;
+        let dt = now.duration_since(t0);
+        (dt >= TREND_MIN).then(|| (bytes - b0) / (dt.as_secs_f64() / 3600.0))
+    }
+
+    async fn disk_trend(&self) -> Result<String, String> {
+        let rate = |g: Option<f64>| match g {
+            Some(g) => format!("{}{}/h", if g >= 0.0 { "+" } else { "" }, crate::du::human(g)),
+            None => "growth: measuring".into(),
+        };
+        if self.metric == Metric::DirSizeGb {
+            let u = crate::du::usage(&self.arg).await?;
+            let g = self.growth_per_hour(Instant::now(), u.bytes as f64);
+            let mut detail = format!("{} ({}) · {} · {} files", crate::du::human(u.bytes as f64), self.arg, rate(g), u.files);
+            if u.unreadable > 0 {
+                detail += &format!(" · {} unreadable", u.unreadable);
+            }
+            let gb = u.bytes as f64 / 1e9;
+            return if gb > self.bound { Err(format!("{detail} — max {} GB", self.bound)) } else { Ok(detail) };
+        }
+        // DiskHoursToFull: how long until the free space (as non-root sees it) is gone
+        // at the rate it shrank over the last hour.
+        let st = statvfs(&self.arg)?;
+        let avail = st.1 * st.4;
+        let used = st.0 * st.4 - avail;
+        let g = self.growth_per_hour(Instant::now(), used);
+        let head = format!("{} free ({}) · {}", crate::du::human(avail), self.arg, rate(g));
+        match g {
+            Some(g) if g > 0.0 => {
+                let hours = avail / g;
+                let detail = format!("{head} · full in {}", fmt_hours(hours));
+                if hours < self.bound { Err(format!("{detail} — min {} h", self.bound)) } else { Ok(detail) }
+            }
+            _ => Ok(head),
+        }
+    }
+
     pub async fn run(&self) -> Result<String, String> {
+        if matches!(self.metric, Metric::DirSizeGb | Metric::DiskHoursToFull) {
+            return self.disk_trend().await;
+        }
         let (v, unit) = self.value().await?;
         if self.metric == Metric::MountWritable {
             return if v > 0.0 { Err(format!("{} is mounted read-only", self.arg)) } else { Ok(format!("{} writable", self.arg)) };
@@ -365,14 +424,24 @@ fn battery_watts() -> Result<(f64, &'static str), String> {
     Err("no battery".into())
 }
 
-/// (blocks, blocks available, inodes, inodes available)
-fn statvfs(path: &str) -> Result<(f64, f64, f64, f64), String> {
+fn fmt_hours(h: f64) -> String {
+    if h < 1.0 {
+        format!("{:.0} min", h * 60.0)
+    } else if h < 48.0 {
+        format!("{h:.1} h")
+    } else {
+        format!("{:.0} days", h / 24.0)
+    }
+}
+
+/// (blocks, blocks available, inodes, inodes available, fragment size)
+fn statvfs(path: &str) -> Result<(f64, f64, f64, f64, f64), String> {
     let c = std::ffi::CString::new(path).map_err(|_| "bad path".to_string())?;
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return Err(format!("{path}: {}", std::io::Error::last_os_error()));
     }
-    Ok((st.f_blocks as f64, st.f_bavail as f64, st.f_files as f64, st.f_favail as f64))
+    Ok((st.f_blocks as f64, st.f_bavail as f64, st.f_files as f64, st.f_favail as f64, st.f_frsize as f64))
 }
 
 // ─── Caddy RED metrics ───────────────────────────────────────────────────────
@@ -550,6 +619,30 @@ caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",hos
         let w = |a: f64, b: f64| m.from_delta(&[a, 1e9], &[b, 1e9], Duration::from_secs(10)).0;
         assert!((w(1e6, 101e6) - 10.0).abs() < 1e-9); // 100 J in 10 s
         assert!((w(1e9 - 50e6, 50e6) - 10.0).abs() < 1e-9); // wrapped
+    }
+
+    #[test]
+    fn growth_rate_over_window() {
+        let m = MetricProbe::new("dir_size_gb", Some("/"), None, None, None, None).unwrap();
+        let t0 = Instant::now();
+        let at = |mins: u64| t0 + Duration::from_secs(mins * 60);
+        assert_eq!(m.growth_per_hour(at(0), 0.0), None);
+        assert_eq!(m.growth_per_hour(at(5), 50.0), None); // < TREND_MIN
+        assert_eq!(m.growth_per_hour(at(30), 300.0), Some(600.0)); // 300 B in 30 min
+        // after an hour the window slides: oldest kept sample is 5 min
+        let g = m.growth_per_hour(at(80), 300.0).unwrap();
+        assert!((g - (250.0 / 75.0 * 60.0)).abs() < 1e-6, "{g}");
+        assert_eq!(fmt_hours(0.5), "30 min");
+        assert_eq!(fmt_hours(72.0), "3 days");
+    }
+
+    #[tokio::test]
+    async fn disk_trend_metrics_run() {
+        let d = MetricProbe::new("disk_hours_to_full", Some("/"), None, None, None, None).unwrap();
+        assert!(d.run().await.unwrap().contains("free (/)"));
+        let s = MetricProbe::new("dir_size_gb", Some(env!("CARGO_MANIFEST_DIR")), None, None, None, None).unwrap();
+        let r = s.run().await.unwrap();
+        assert!(r.contains("files") && r.contains("measuring"), "{r}");
     }
 
     #[tokio::test]

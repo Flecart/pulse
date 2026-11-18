@@ -46,7 +46,7 @@ over the time since the previous run.
 |---|---|
 | CPU | `cpu_percent`, `iowait_percent`, `steal_percent`, `load_per_core` |
 | Memory | `mem_available_percent`, `swap_pages_per_sec`, `oom_kills` |
-| Disk | `disk_free_percent`, `inodes_free_percent`, `mount_writable`, `disk_latency_ms`, `disk_queue` |
+| Disk | `disk_free_percent`, `disk_hours_to_full`, `dir_size_gb`, `inodes_free_percent`, `mount_writable`, `disk_latency_ms`, `disk_queue` |
 | Network | `net_drops_per_sec`, `net_errors_per_sec`, `tcp_retrans_percent`, `tcp_connections` |
 | System | `fd_used_percent` |
 | GPU | `gpu_util_percent`, `gpu_mem_percent`, `gpu_temp_c`, `gpu_throttle` |
@@ -57,6 +57,36 @@ default, so grant the service read access, e.g. with a udev rule:
 `SUBSYSTEM=="powercap", RUN+="/bin/sh -c 'chgrp pulse /sys%p/energy_uj && chmod 0440 /sys%p/energy_uj'"`.
 
 Each metric has a sensible default bound.
+
+**Disk growth.** `disk_hours_to_full` (needs `path`, default `min = 24`) extrapolates the last
+hour of free-space change: it fails when the filesystem would be full within `min` hours, which
+catches a runaway log long before `disk_free_percent` does. `dir_size_gb` (needs `path`, default
+`max = 50`) is the size of one directory (allocated blocks, one filesystem, symlinks not followed,
+hard links counted once), shown with its growth per hour, so you see *which* service is eating
+the disk. Both say "measuring" for the first 10 minutes. Give `dir_size_gb` checks a longer
+`interval_secs` (e.g. 300); a walk costs about 10 ms per 1,000 files with a warm cache.
+
+Service data directories are usually unreadable to pulse's user. Rather than giving the
+network-facing daemon read access to them, set `du_file` and run `pulse --du-scan` from a
+separate timer that may read them but has no network:
+
+```ini
+# pulse-du.service (+ a pulse-du.timer with OnUnitActiveSec=5min)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pulse -c /etc/pulse/pulse.toml --du-scan
+User=pulse
+StateDirectory=pulse
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+PrivateNetwork=yes
+ProtectSystem=strict
+Nice=19
+IOSchedulingClass=idle
+```
+
+The daemon then reads the sizes from `du_file`, and its `dir_size_gb` checks fail if the file is
+more than 30 minutes old.
 
 **Caddy traffic** needs the global option `metrics { per_host }` in your Caddyfile. pulse reads
 `http://127.0.0.1:2019/metrics` by default.

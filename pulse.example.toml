@@ -9,6 +9,7 @@ history = 1440                # raw samples kept in memory per check (24 h at 60
 # data_dir = "/var/lib/pulse"   # persist history (one JSON-lines file per day)
 retention_days = 7            # older days are deleted; hourly up/down counts kept in memory
 ca_files = []                 # extra PEM roots for HTTPS checks, e.g. a Caddy local CA
+# du_file = "/var/lib/pulse/du.json"  # dir_size_gb reads sizes written by `pulse --du-scan`
 
 [alerts]
 # Push notifications: pick a long random topic (anyone who knows it can read it).
@@ -65,6 +66,23 @@ kind = "metric"
 metric = "disk_free_percent"   # all metrics: pulse --list-metrics
 path = "/"
 min = 10                       # each metric has a default bound; override with min or max
+
+[[check]]
+name = "Disk / fill rate"
+group = "machine"
+kind = "metric"
+metric = "disk_hours_to_full"  # fails if / would be full within `min` hours at last hour's rate
+path = "/"
+min = 24
+
+[[check]]
+name = "app logs"
+group = "machine"
+kind = "metric"
+metric = "dir_size_gb"         # size of one directory + growth per hour
+path = "/var/log/myapp"
+max = 5
+interval_secs = 300
 
 [[check]]
 name = "CPU"

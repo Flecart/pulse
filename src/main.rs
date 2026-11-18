@@ -3,9 +3,11 @@
 //!   pulse [--config /etc/pulse/pulse.toml]
 //!   pulse --check-config FILE     validate and exit (non-zero on error)
 //!   pulse --test-alert            send a test notification on every channel and exit
+//!   pulse --du-scan               walk every dir_size_gb path into `du_file` and exit
 
 mod alert;
 mod config;
+mod du;
 mod metrics;
 mod probe;
 mod state;
@@ -19,7 +21,7 @@ use std::{
 };
 
 fn usage() -> ! {
-    eprintln!("usage: pulse [--config FILE] [--test-alert] | --check-config FILE | --list-metrics | --version");
+    eprintln!("usage: pulse [--config FILE] [--test-alert | --du-scan] | --check-config FILE | --list-metrics | --version");
     std::process::exit(2)
 }
 
@@ -57,6 +59,7 @@ async fn main() {
     let mut path = PathBuf::from(std::env::var("PULSE_CONFIG").unwrap_or_else(|_| "/etc/pulse/pulse.toml".into()));
     let mut check_only = false;
     let mut test_alert = false;
+    let mut du_scan = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--config" | "-c" => path = args.next().map(PathBuf::from).unwrap_or_else(|| usage()),
@@ -65,6 +68,7 @@ async fn main() {
                 check_only = true;
             }
             "--test-alert" => test_alert = true,
+            "--du-scan" => du_scan = true,
             "--list-metrics" => {
                 for m in metrics::names() {
                     println!("{m}");
@@ -86,6 +90,36 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    if du_scan {
+        let Some(out) = &cfg.du_file else {
+            eprintln!("pulse: --du-scan needs `du_file` in {}", path.display());
+            std::process::exit(1)
+        };
+        match du::scan_to_file(&cfg.du_paths(), out) {
+            Ok(c) => {
+                for (p, r) in &c.paths {
+                    match r {
+                        Ok(u) => println!(
+                            "{p}: {} in {} files, {} unreadable ({} ms)",
+                            du::human(u.bytes as f64),
+                            u.files,
+                            u.unreadable,
+                            u.scan_ms
+                        ),
+                        Err(e) => println!("{p}: ERROR {e}"),
+                    }
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("pulse: {e}");
+                std::process::exit(1)
+            }
+        }
+    }
+    if let Some(f) = &cfg.du_file {
+        du::set_cache_file(f.clone());
+    }
     let tls = tls_config(&cfg.ca_files).unwrap_or_else(|e| {
         eprintln!("pulse: {e}");
         std::process::exit(1)
